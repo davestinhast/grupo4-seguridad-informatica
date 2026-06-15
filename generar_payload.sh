@@ -7,7 +7,7 @@ echo ""
 echo "Tu IP actual en la red:"
 ip a | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1
 echo ""
-echo "Escribe la IP que usara el payload (LHOST):"
+echo "Escribe la IP que usará el payload (LHOST):"
 read IP_ATACANTE
 
 if [ -z "$IP_ATACANTE" ]; then
